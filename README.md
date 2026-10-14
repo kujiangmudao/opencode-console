@@ -4,7 +4,7 @@ A small, dependency-free toolkit for [opencode](https://opencode.ai): a night-sh
 
 | Component | What it is | Where |
 | --- | --- | --- |
-| **Night Shift** | opencode plugin — keeps armed sessions working while you sleep, then clocks off at an end time. Multi-session, busy-aware, completion markers, zero dependencies, 22 tests. | [`packages/night-shift/`](packages/night-shift/) · npm `opencode-night-shift` (coming soon) |
+| **Night Shift** | opencode plugin — keeps armed sessions working while you sleep, then clocks off at an end time. Multi-session, busy-aware, an evidence-gated completion protocol, idle detection, zero dependencies, 37 tests. | [`packages/night-shift/`](packages/night-shift/) · npm `opencode-night-shift` (coming soon) |
 | **Console** | Local web console — a cost ledger with DeepSeek official CNY pricing (cache- and peak-aware), per-round cost attribution, subagent roll-up, session analytics and night-shift controls. Reads your local opencode data only; no network calls. | [`dashboard/`](dashboard/) |
 
 ## Quick start
