@@ -1,6 +1,6 @@
 {
   "name": "opencode-night-shift",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Shift-based session supervisor for opencode: auto-continues multiple sessions until an end time, with real-time anchors, busy-awareness, completion detection and zero dependencies.",
   "type": "module",
   "main": "src/night-shift.js",

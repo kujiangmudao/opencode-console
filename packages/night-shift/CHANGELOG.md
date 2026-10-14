@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0
+
+Reinforcements: mechanical guards on top of the prompt layer.
+
+- **Completion evidence gate** (`evidence: "strict"`, default): the completion marker must be paired with an `[夜间任务证据]` / `[task evidence]` line right above it (one-line summary: what was done, how it was verified). A claim without evidence does not end the session — it gets exactly one nudge (sent through the normal throttled queue) and stays watched. `evidence: "loose"` restores the 0.1.x marker-only behavior.
+- **Idle-turn detection** (`idleTurns`, default 3): counts consecutive turns with no tool calls and no real output; at the threshold the continuation prompt is escalated, and at 2× the session is paused (`paused: true` in the config) so a lazy night waits for a human instead of burning tokens.
+- **Turn trace**: one structured log line per turn (`轮次留痕 … fp=… changed=yes|no`) — the morning read shows where progress actually happened.
+- **Goal-engine yield** (`yieldToGoals`, default true): steps aside when `.opencode/goals` exists for the session's project (a goal plugin is active) and resumes when it is gone. Best-effort overlap guard only — never arm the same session in two continuation plugins.
+- **Config**: new top-level fields `evidence`, `idleTurns`, `yieldToGoals`; session entries gained `paused`.
+- Default `message` template updated to the two-line evidence protocol; READMEs updated; tests grew to 37.
+
 ## 0.1.0
 
 Initial release.

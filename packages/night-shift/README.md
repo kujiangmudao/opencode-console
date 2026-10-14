@@ -38,10 +38,14 @@ Typical use: hand your overnight work to a shift, sleep, and in the morning read
 - **Multi-session** — supervise several sessions at once; a completion marker removes only that session.
 - **Real-clock anchors** — `{time}` / `{remaining}` are rendered from the actual local clock, which also helps against "it must be morning by now" hallucinations.
 - **False-positive guards** — the plugin never reacts to its own messages; `别收工` ("don't stop") does not stop; completion markers are only recognized on the last line (markdown bold and full-width brackets tolerated).
+- **Completion evidence gate** — a `[夜间任务完成]` / `[task done]` marker must be paired with an `[夜间任务证据]` / `[task evidence]` summary line right above it; a claim without evidence gets exactly one nudge and stays watched (`evidence: "loose"` restores the old marker-only behavior).
+- **Idle-turn detection** — counts consecutive turns with no tool calls and no real output; at `idleTurns` (default 3) the prompt is escalated, at 2× the session is paused instead of burning tokens.
+- **Turn trace** — one structured log line per turn (fingerprint + `changed=yes/no`) for the morning read.
+- **Goal-engine yield** — automatically steps aside when the project has `.opencode/goals` (a goal plugin is active) and resumes when it is gone.
 - **Busy-aware** — skips a session while it is `busy`/`retrying` and resumes on the next idle.
 - **No session aborts** — the plugin never kills a running turn; stalled-session recovery is left to specialists.
 - **Fast checks** — tracks the last assistant message via `message.updated` and fetches only that one (fallback: full list).
-- **Tested** — 22 unit tests, CI on Linux + Windows × Node 20/22.
+- **Tested** — 37 unit tests, CI on Linux + Windows × Node 20/22.
 
 ## Install
 
@@ -76,7 +80,7 @@ Create (or edit) `night-shift.json` in the data directory — the plugin hot-rel
 {
   "enabled": true,
   "endTime": "08:30",
-  "message": "Now {time} ({remaining} left).\n\nContinue the task: do not stop, do not wait for user input.\nIf everything is done, review or run tests to verify.\nWhen fully verified, end your last line with: [task done]",
+  "message": "Now {time} ({remaining} left).\n\nContinue the task: do not stop, do not wait for user input.\nIf everything is done, review or run tests to verify.\nWhen fully verified, output two final lines: the second-to-last starts with [task evidence] followed by a one-line summary (what was done, how it was verified); the last line is exactly [task done]",
   "sessions": [
     { "id": "ses_your_session_id", "sent": 0, "lastSentAt": 0 }
   ]
@@ -89,7 +93,7 @@ Find session IDs in opencode (they are `ses_...`), or use the optional web dashb
 
 - the clock reaches `endTime` (global stop)
 - a short message starting with a stop phrase in any watched session: `收工` / `先收工吧` / `停止夜班，睡觉了` (`别收工` will not trigger it)
-- the model ends its last line with `[夜间任务完成]` / `[task done]` (that session only)
+- the model ends its last line with `[夜间任务完成]` / `[task done]`, **paired with an `[夜间任务证据]` / `[task evidence]` line right above it** (that session only; a claim without evidence gets one reminder and stays watched)
 
 **Watch it work** — `night-shift.log` in the data directory records every continuation, skip reason, and stop.
 
@@ -101,7 +105,10 @@ Find session IDs in opencode (they are `ses_...`), or use the optional web dashb
 | `endTime` | local `HH:MM`; global stop at that time |
 | `endAt` | absolute epoch ms — optional, derived from `endTime` when omitted |
 | `message` | continuation template (`{time}` `{remaining}` supported) |
-| `sessions[]` | `{ id, sent, lastSentAt }` per watched session |
+| `evidence` | `"strict"` (default) — require an evidence line above the completion marker; `"loose"` — legacy marker-only behavior |
+| `idleTurns` | consecutive no-progress turns before the escalation prompt (default `3`; `0` disables idle detection) |
+| `yieldToGoals` | step aside while `.opencode/goals` exists (default `true`; set `false` to disable) |
+| `sessions[]` | `{ id, sent, lastSentAt, paused? }` per watched session; `paused: true` freezes that session (the log says why — remove the flag to re-arm) |
 
 Environment variables:
 
@@ -119,7 +126,7 @@ Environment variables:
 
 The plugin subscribes to three event types:
 
-- `session.idle` — is this session armed? was the last turn an error (leave it to a network-recovery plugin)? does it end with a completion marker? if not → send the template after a short delay.
+- `session.idle` — is this session armed? was the last turn an error (leave it to a network-recovery plugin)? does it end with a completion marker (with evidence in strict mode)? if not → send the template after a short delay; consecutive no-progress turns escalate and eventually pause the session.
 - `session.status` — track `busy`/`retry` per session and re-check right before sending, so a continuation never queues into a running turn.
 - `message.updated` — remember the last assistant message id so the check fetches a single message instead of the whole history.
 
@@ -135,16 +142,19 @@ The log is the demo (session ids scrubbed; default log language is Chinese):
 2026/9/25 00:44:37  续跑完成（该会话第 3 次）session=ses_a1b2c3
 2026/9/25 01:31:15  跳过：上一条是错误，交给网络续跑插件 session=ses_d4e5f6
 2026/9/25 03:20:09  续跑完成（该会话第 7 次）session=ses_d4e5f6
-2026/9/25 05:03:44  停止单个会话 session=ses_a1b2c3：检测到完成标记（还剩 1 个）
+2026/9/25 05:03:44  停止单个会话 session=ses_a1b2c3：检测到完成标记（证据：12 个单测全绿，diff 已复核）（还剩 1 个）
+2026/9/25 06:58:02  轮次留痕 session=ses_d4e5f6 sent=9 fp=-s changed=no
+2026/9/25 07:41:20  已暂停值守（连续空转 6 轮）session=ses_d4e5f6
 2026/9/25 08:30:00  夜班全局停止：结束时间已到
 ```
 
 Inside the session (the message is a template in any language; `{time}`/`{remaining}` are substituted at send time):
 
 ```text
-[auto message]  It's 03:20 — keep going. State your progress; end your last line with [task done]
-[model]         Finished the 12 unit tests for the orders module (npm test green); all goals for this batch are met.
-[model last]    [task done]     ← only the last line counts; the session is dropped from the shift
+[auto message]  It's 03:20 — keep going. State your progress; finish with an evidence line + [task done]
+[model]         Finished the 12 unit tests for the orders module (npm test green).
+[model 2nd-last] [task evidence] npm test — 12/12 green; diff reviewed
+[model last]    [task done]     ← the marker needs the evidence line above it; then the session is dropped from the shift
 ```
 
 ## Use cases
@@ -166,12 +176,14 @@ Inside the session (the message is a template in any language; `{time}`/`{remain
 - **Does it kill stuck sessions?** No. Recovery for frozen streams belongs to dedicated plugins; night-shift deliberately never aborts your long-running work.
 - **Does it upload anything?** No. Local files only.
 - **Does it conflict with network-error auto-resume plugins?** No — night-shift skips turns that ended in an error and leaves them to those plugins.
+- **Why did a session get "paused"?** Idle detection paused it after 2× `idleTurns` consecutive no-progress turns (`已暂停值守` in the log). Check the session and the log, then delete `paused` from that session entry (or set it to `false`) to re-arm it.
+- **Can it run alongside a goal plugin?** Not in the same session — one continuation owner per session. Night-shift yields automatically when `.opencode/goals` exists, but treat that as best-effort: don't arm the same session in two plugins.
 - **Logs and messages are Chinese?** Defaults are Chinese; `message` is a template you can write in any language, and the completion marker accepts `[task done]`.
 
 ## Development
 
 ```bash
-npm test        # node:test — 22 cases
+npm test        # node:test — 37 cases
 ```
 
 ```

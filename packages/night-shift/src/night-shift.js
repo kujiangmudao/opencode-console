@@ -31,7 +31,7 @@ const DEFAULT_MESSAGE = [
   "",
   "请回顾任务目标继续执行：如果任务尚未完成，直接继续，不要停止、不要等待用户输入。",
   "如果你认为已经完成：请自行 review 或运行测试验证一遍，确认无误再结束。",
-  "只有当你确认全部完成且验证通过时，才在最后单独输出一行：[夜间任务完成]"
+  "确认全部完成后，最后输出两行：倒数第二行以 [夜间任务证据] 开头并附一句话（做了什么、如何验证）；最后一行单独输出 [夜间任务完成]"
 ].join("\n")
 
 function fileLog(line) {
@@ -44,22 +44,25 @@ function fileLog(line) {
 let cache = { mtime: 0, data: null }
 
 function normalize(raw) {
-  const def = { enabled: false, endTime: "08:30", endAt: 0, message: DEFAULT_MESSAGE, sessions: [] }
+  const def = { enabled: false, endTime: "08:30", endAt: 0, message: DEFAULT_MESSAGE, sessions: [], evidence: "strict", idleTurns: 3, yieldToGoals: true }
   if (!raw || typeof raw !== "object") return def
   let sessions = []
   if (Array.isArray(raw.sessions)) {
     sessions = raw.sessions
       .filter((s) => s && typeof s.id === "string" && s.id)
-      .map((s) => ({ id: s.id, sent: Number(s.sent) || 0, lastSentAt: Number(s.lastSentAt) || 0 }))
+      .map((s) => ({ id: s.id, sent: Number(s.sent) || 0, lastSentAt: Number(s.lastSentAt) || 0, paused: !!s.paused }))
   } else if (typeof raw.sessionId === "string" && raw.sessionId) {
-    sessions = [{ id: raw.sessionId, sent: Number(raw.sent) || 0, lastSentAt: Number(raw.lastSentAt) || 0 }]
+    sessions = [{ id: raw.sessionId, sent: Number(raw.sent) || 0, lastSentAt: Number(raw.lastSentAt) || 0, paused: !!raw.paused }]
   }
   return {
     enabled: !!raw.enabled,
     endTime: String(raw.endTime || def.endTime),
     endAt: Number(raw.endAt) || computeEndAt(String(raw.endTime || def.endTime)),
     message: typeof raw.message === "string" && raw.message ? raw.message : def.message,
-    sessions
+    sessions,
+    evidence: raw.evidence === "loose" ? "loose" : "strict",
+    idleTurns: typeof raw.idleTurns === "number" && Number.isInteger(raw.idleTurns) ? Math.max(0, raw.idleTurns) : (typeof raw.idleTurns === "string" && /^\s*-?\d+\s*$/.test(raw.idleTurns) ? Math.max(0, parseInt(raw.idleTurns, 10)) : 3),
+    yieldToGoals: raw.yieldToGoals !== false
   }
 }
 
@@ -108,6 +111,20 @@ function completedBy(text) {
   return /^\[(夜间任务完成|任务完成|task done|night shift done)\]$/i.test(last)
 }
 
+function evidenceOf(text) {
+  const lines = String(text || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  if (lines.length < 2) return null
+  const line = lines[lines.length - 2]
+    .replace(/[*_`~]/g, "")
+    .replace(/【/g, "[")
+    .replace(/】/g, "]")
+    .trim()
+  const m = /^\[(夜间任务证据|任务证据|task evidence)\]\s*(.*)$/i.exec(line)
+  if (!m) return null
+  const summary = m[2].trim()
+  return summary || null
+}
+
 export const NightShift = async ({ client }) => {
   if (process.env.OC_NIGHT_SHIFT === "0") {
     fileLog("插件已禁用（OC_NIGHT_SHIFT=0）")
@@ -120,7 +137,7 @@ export const NightShift = async ({ client }) => {
   function stOf(sessionID) {
     let st = state.get(sessionID)
     if (!st) {
-      st = { sending: false, sentAt: 0, lastSentText: "", busy: false, lastMsgId: "", retryTimer: null }
+      st = { sending: false, sentAt: 0, lastSentText: "", busy: false, lastMsgId: "", retryTimer: null, idleStreak: 0, evidenceNudged: false, lastFp: "", dir: undefined, yielding: false }
       state.set(sessionID, st)
     }
     return st
@@ -162,27 +179,31 @@ export const NightShift = async ({ client }) => {
         const r = await client.session.message({ path: { id: sessionID, messageID: st.lastMsgId } })
         const item = r && r.data ? r.data : r
         if (item && item.info && item.info.role === "assistant") {
-          return { text: textOf(item.parts), hasError: !!item.info.error }
+          const parts = item.parts || []
+          const text = textOf(parts)
+          return { text, hasError: !!item.info.error, hasTool: parts.some((p) => p && p.type === "tool"), textLen: text.length }
         }
       } catch {}
     }
     try {
       const r = await client.session.messages({ path: { id: sessionID } })
       const list = r && r.data ? r.data : r
-      if (!Array.isArray(list)) return { text: "", hasError: false }
+      if (!Array.isArray(list)) return { text: "", hasError: false, hasTool: false, textLen: 0 }
       for (let i = list.length - 1; i >= 0; i--) {
         const item = list[i]
         if (item && item.info && item.info.role === "assistant") {
-          return { text: textOf(item.parts), hasError: !!item.info.error }
+          const parts = item.parts || []
+          const text = textOf(parts)
+          return { text, hasError: !!item.info.error, hasTool: parts.some((p) => p && p.type === "tool"), textLen: text.length }
         }
       }
-      return { text: "", hasError: false }
+      return { text: "", hasError: false, hasTool: false, textLen: 0 }
     } catch {
-      return { text: "", hasError: false }
+      return { text: "", hasError: false, hasTool: false, textLen: 0 }
     }
   }
 
-  function schedule(sessionID) {
+  function schedule(sessionID, opts) {
     const st = stOf(sessionID)
     if (st.sending) return
     const since = Date.now() - st.sentAt
@@ -190,7 +211,7 @@ export const NightShift = async ({ client }) => {
       if (!st.retryTimer) {
         st.retryTimer = setTimeout(() => {
           st.retryTimer = null
-          schedule(sessionID)
+          schedule(sessionID, opts)
         }, MIN_INTERVAL_MS - since + 100)
       }
       return
@@ -207,6 +228,10 @@ export const NightShift = async ({ client }) => {
         st.sending = false
         return
       }
+      if (entry.paused) {
+        st.sending = false
+        return
+      }
       if (st.busy) {
         fileLog("跳过：会话正忙（等下次空闲）session=" + sessionID)
         st.sending = false
@@ -217,7 +242,7 @@ export const NightShift = async ({ client }) => {
         st.sending = false
         return
       }
-      const text = render(fresh.message, fresh)
+      const text = opts && opts.text ? opts.text : render(fresh.message, fresh)
       st.lastSentText = text.trim()
       const bumped = bumpSession(sessionID, { sent: entry.sent + 1, lastSentAt: Date.now() })
       const sent = bumped ? bumped.sent : "?"
@@ -236,6 +261,25 @@ export const NightShift = async ({ client }) => {
     if (r.data && r.data.id) return r.data
     if (r.info) return r.info
     return r
+  }
+
+  async function shouldYield(sessionID) {
+    const st = stOf(sessionID)
+    if (st.dir === undefined) {
+      if (client.session && typeof client.session.get === "function") {
+        try {
+          const r = await client.session.get({ path: { id: sessionID } })
+          const d = infoOf(r).directory
+          st.dir = typeof d === "string" && d ? d : null
+        } catch {
+          st.dir = null
+        }
+      } else {
+        st.dir = null
+      }
+    }
+    if (!st.dir) return false
+    return existsSync(join(st.dir, ".opencode", "goals"))
   }
 
   async function selfTest() {
@@ -313,21 +357,64 @@ export const NightShift = async ({ client }) => {
       if (!sessionID) return
       const cfg = readConfig()
       if (!cfg || !cfg.enabled) return
-      if (!cfg.sessions.some((s) => s.id === sessionID)) return
+      const entry = cfg.sessions.find((s) => s.id === sessionID)
+      if (!entry) return
+      if (entry.paused) return
       if (Date.now() >= cfg.endAt) {
         stopAll("结束时间已到")
         return
+      }
+      const st = stOf(sessionID)
+      if (cfg.yieldToGoals && (await shouldYield(sessionID))) {
+        if (!st.yielding) {
+          st.yielding = true
+          fileLog("让位：检测到活跃 goal 状态，跳过值守 session=" + sessionID)
+        }
+        return
+      }
+      if (st.yielding) {
+        st.yielding = false
+        fileLog("恢复值守（goal 状态消失）session=" + sessionID)
       }
       const last = await lastAssistant(sessionID)
       if (last.hasError) {
         fileLog("跳过：上一条是错误，交给网络续跑插件 session=" + sessionID)
         return
       }
+      const fp = (last.hasTool ? "t" : "-") + (last.textLen < 200 ? "s" : last.textLen < 1000 ? "m" : "l")
+      const changed = fp === st.lastFp ? "no" : "yes"
+      fileLog("轮次留痕 session=" + sessionID + " sent=" + entry.sent + " fp=" + fp + " changed=" + changed)
+      st.lastFp = fp
       if (completedBy(last.text)) {
-        removeSession(sessionID, "检测到完成标记")
+        if (cfg.evidence === "loose") {
+          removeSession(sessionID, "检测到完成标记")
+          return
+        }
+        const ev = evidenceOf(last.text)
+        if (ev) {
+          removeSession(sessionID, "检测到完成标记（证据：" + ev.slice(0, 60) + "）")
+          return
+        }
+        if (st.evidenceNudged) {
+          fileLog("跳过：完成标记仍无证据（已提醒过一次）session=" + sessionID)
+          return
+        }
+        st.evidenceNudged = true
+        schedule(sessionID, { text: "你输出了完成标记，但没有附上证据行。请二选一：1) 继续完成剩余工作；2) 若确实全部完成，请新输出两行：倒数第二行「[夜间任务证据] 做了什么、如何验证」，最后一行「[夜间任务完成]」。" })
         return
       }
-      schedule(sessionID)
+      st.evidenceNudged = false
+      const isIdle = !last.hasTool && last.textLen < 200
+      st.idleStreak = isIdle ? st.idleStreak + 1 : 0
+      if (cfg.idleTurns > 0 && st.idleStreak >= cfg.idleTurns * 2) {
+        bumpSession(sessionID, { paused: true })
+        fileLog("已暂停值守（连续空转 " + st.idleStreak + " 轮）session=" + sessionID)
+        return
+      }
+      const upgradeText = cfg.idleTurns > 0 && st.idleStreak >= cfg.idleTurns
+        ? "你已连续 " + st.idleStreak + " 轮没有实际推进（没有调用任何工具、也没有产出）。请立刻执行下一步具体操作（编辑文件、运行命令），而不是继续陈述。若确实已完成，请按证据格式结束。"
+        : undefined
+      schedule(sessionID, upgradeText ? { text: upgradeText } : undefined)
     },
     "chat.message": async (input, output) => {
       const sessionID = input && input.sessionID
