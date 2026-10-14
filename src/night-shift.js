@@ -233,6 +233,7 @@ export const NightShift = async ({ client }) => {
   function infoOf(r) {
     if (!r) return {}
     if (r.data && r.data.info) return r.data.info
+    if (r.data && r.data.id) return r.data
     if (r.info) return r.info
     return r
   }
@@ -241,6 +242,7 @@ export const NightShift = async ({ client }) => {
     if (!client.session || typeof client.session.create !== "function") return
     const flag = join(PROJECT_DIR, "selftest.flag")
     if (!existsSync(flag)) return
+    try { unlinkSync(flag) } catch { return }
     fileLog("自检开始（验证发消息通道与模型继承）")
     let sid = null
     try {
@@ -283,7 +285,6 @@ export const NightShift = async ({ client }) => {
         fileLog("自检: 删除测试会话失败 " + String((e && e.message) || e))
       }
     }
-    try { unlinkSync(flag) } catch {}
     fileLog("自检结束")
   }
 
