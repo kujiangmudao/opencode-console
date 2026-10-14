@@ -4,7 +4,7 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-[![CI](https://github.com/kujiangmudao/opencode-night-shift/actions/workflows/ci.yml/badge.svg)](https://github.com/kujiangmudao/opencode-night-shift/actions/workflows/ci.yml)
+[![CI](https://github.com/kujiangmudao/opencode-console/actions/workflows/ci.yml/badge.svg)](https://github.com/kujiangmudao/opencode-console/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/opencode-night-shift?style=flat-square&label=npm)](https://www.npmjs.com/package/opencode-night-shift)
 [![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 [![node](https://img.shields.io/badge/node-%3E%3D20-3c873a?style=flat-square)](#install)
