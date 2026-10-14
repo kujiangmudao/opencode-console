@@ -20,3 +20,4 @@ jobs:
           node-version: ${{ matrix.node }}
       - name: Test
         run: npm test
+        working-directory: packages/night-shift

@@ -1,40 +1,10 @@
 {
-  "name": "opencode-night-shift",
-  "version": "0.1.0",
-  "description": "Shift-based session supervisor for opencode: auto-continues multiple sessions until an end time, with real-time anchors, busy-awareness, completion detection and zero dependencies.",
-  "type": "module",
-  "main": "src/night-shift.js",
-  "exports": {
-    ".": "./src/night-shift.js"
-  },
-  "files": [
-    "src",
-    "assets"
-  ],
-  "scripts": {
-    "test": "node --test"
-  },
-  "keywords": [
-    "opencode",
-    "opencode-plugin",
-    "night-shift",
-    "shift",
-    "auto-continue",
-    "session-supervisor",
-    "long-running",
-    "overnight",
-    "agent"
-  ],
+  "name": "opencode-console",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A dependency-free toolkit for opencode: night-shift session supervisor + local usage console",
   "license": "MIT",
-  "engines": {
-    "node": ">=20"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/kujiangmudao/opencode-night-shift.git"
-  },
-  "bugs": {
-    "url": "https://github.com/kujiangmudao/opencode-night-shift/issues"
-  },
-  "homepage": "https://github.com/kujiangmudao/opencode-night-shift#readme"
+  "scripts": {
+    "test": "npm --prefix packages/night-shift test"
+  }
 }
