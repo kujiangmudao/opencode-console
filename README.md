@@ -125,6 +125,28 @@ The plugin subscribes to three event types:
 
 Config I/O is multi-process friendly: BOM tolerance, unknown-field preservation, legacy-format migration, mtime-based hot reload.
 
+## In action
+
+The log is the demo (session ids scrubbed; default log language is Chinese):
+
+```text
+# 23:00 — arm two sessions in the dashboard, hit "Start", go to sleep
+2026/9/24 23:12:40  跳过：会话正忙（等下次空闲）session=ses_d4e5f6
+2026/9/25 00:44:37  续跑完成（该会话第 3 次）session=ses_a1b2c3
+2026/9/25 01:31:15  跳过：上一条是错误，交给网络续跑插件 session=ses_d4e5f6
+2026/9/25 03:20:09  续跑完成（该会话第 7 次）session=ses_d4e5f6
+2026/9/25 05:03:44  停止单个会话 session=ses_a1b2c3：检测到完成标记（还剩 1 个）
+2026/9/25 08:30:00  夜班全局停止：结束时间已到
+```
+
+Inside the session (the message is a template in any language; `{time}`/`{remaining}` are substituted at send time):
+
+```text
+[auto message]  It's 03:20 — keep going. State your progress; end your last line with [task done]
+[model]         Finished the 12 unit tests for the orders module (npm test green); all goals for this batch are met.
+[model last]    [task done]     ← only the last line counts; the session is dropped from the shift
+```
+
 ## Use cases
 
 | Situation | What you do |
