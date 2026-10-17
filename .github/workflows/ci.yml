@@ -21,3 +21,7 @@ jobs:
       - name: Test
         run: npm test
         working-directory: packages/night-shift
+      - name: Test dashboard (cleanup core)
+        run: node --test dashboard/test/cleanup.test.cjs
+        working-directory: .
+        if: matrix.node == 22

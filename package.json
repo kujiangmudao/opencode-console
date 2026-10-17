@@ -5,6 +5,7 @@
   "description": "A dependency-free toolkit for opencode: night-shift session supervisor + local usage console",
   "license": "MIT",
   "scripts": {
-    "test": "npm --prefix packages/night-shift test"
+    "test": "npm --prefix packages/night-shift test",
+    "test:dashboard": "node --test dashboard/test/cleanup.test.cjs"
   }
 }

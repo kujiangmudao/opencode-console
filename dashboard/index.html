@@ -179,6 +179,22 @@
   .round-body { padding: 2px 4px 10px 42px; }
   .round-child { cursor: pointer; }
   .round-child:hover { background: rgba(22,70,255,.05); border-radius: 8px; }
+  .cleanup-summary { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .cleanup-chip { background: #fff; border: 1px solid var(--line2); border-radius: 10px; padding: 6px 10px; font-size: 13px; }
+  .cleanup-chip b { font-variant-numeric: tabular-nums; }
+  .cleanup-toolbar { display: flex; align-items: center; gap: 8px; margin: 6px 0 8px; flex-wrap: wrap; }
+  .cleanup-list { max-height: 46vh; overflow: auto; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+  .cleanup-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 13.5px; cursor: pointer; }
+  .cleanup-row:last-child { border-bottom: 0; }
+  .cleanup-row:hover { background: rgba(22,70,255,.035); }
+  .cleanup-row input[type=checkbox] { width: 16px; height: 16px; flex: none; }
+  .cleanup-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cleanup-size { width: 92px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); flex: none; }
+  .cleanup-cost { width: 96px; text-align: right; font-variant-numeric: tabular-nums; flex: none; }
+  .cleanup-footer { display: flex; align-items: center; gap: 10px; justify-content: flex-end; margin-top: 10px; flex-wrap: wrap; }
+  .cleanup-footer #cleanupStatus { flex: 1; min-width: 0; }
+  .cleanup-warn { color: #b45309; font-weight: 600; }
+  .cleanup-ok { color: #0f9f6e; font-weight: 600; }
 
   .tag {
     display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px; line-height: 19px;
@@ -352,6 +368,7 @@
           <button data-s="cost">最贵</button>
           <button data-s="tokens">最多 Tokens</button>
         </div>
+        <button class="btn" id="cleanupOpen">清理台</button>
       </div>
     </div>
     <div id="sessions" class="sessions"></div>
@@ -382,6 +399,34 @@
       <button class="icon-btn" id="dClose">✕</button>
     </div>
     <div class="modal-body" id="dBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="cleanupModal">
+  <div class="mask" id="cleanupMask"></div>
+  <div class="panel" id="cleanupPanel">
+    <div class="modal-head">
+      <div style="min-width:0">
+        <div class="modal-title">会话清理台</div>
+        <div class="muted small" style="margin-top:4px">删除前自动归档到控制台账本；执行时需要完全退出 opencode</div>
+      </div>
+      <button class="icon-btn" id="cleanupClose">✕</button>
+    </div>
+    <div class="modal-body" id="cleanupBody">
+      <div class="cleanup-summary" id="cleanupSummary"></div>
+      <div class="cleanup-toolbar">
+        <button class="btn" id="cleanupPickCand">选中候选</button>
+        <button class="btn" id="cleanupPickAll">全选</button>
+        <button class="btn" id="cleanupClear">清空</button>
+        <span class="muted small" id="cleanupCount"></span>
+      </div>
+      <div class="cleanup-list" id="cleanupList"></div>
+      <div class="cleanup-footer">
+        <span id="cleanupStatus"></span>
+        <button class="btn" id="cleanupVacuum">紧凑化数据库</button>
+        <button class="btn primary" id="cleanupExec">归档并删除</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1301,13 +1346,187 @@ $("dBody").addEventListener("click", (e) => {
 })
 $("dClose").addEventListener("click", closeDrawer)
 $("modalMask").addEventListener("click", closeDrawer)
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer() })
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeDrawer(); closeCleanupModal() } })
 
 let resizeTimer = null
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer)
   resizeTimer = setTimeout(() => { if (state.data) renderDailyChart(state.data.daily); if (state.detail) renderSeries(state.detail); syncThumbs() }, 150)
 })
+
+const cleanupState = { data: null, sel: new Set(), busy: false, initialized: false }
+
+function cleanupMoney(o) {
+  return state.currency === "usd" ? (o.costUsd || 0) : (o.costCny || 0)
+}
+
+function setCleanupStatus(text, cls) {
+  const el = $("cleanupStatus")
+  el.textContent = text || ""
+  el.className = "small " + (cls === "warn" ? "cleanup-warn" : cls === "ok" ? "cleanup-ok" : "muted")
+}
+
+async function openCleanupModal() {
+  $("cleanupModal").classList.add("open")
+  await loadCleanup()
+}
+
+function closeCleanupModal() {
+  $("cleanupModal").classList.remove("open")
+}
+
+function cleanupCandidates() {
+  if (!cleanupState.data) return []
+  return cleanupState.data.sessions.filter((s) => !s.isMain && s.ageMs > 3 * 86400000)
+}
+
+function expandCleanupSelection() {
+  const j = cleanupState.data
+  if (!j) return []
+  const byParent = new Map()
+  for (const s of j.sessions) {
+    if (!s.parentID) continue
+    if (!byParent.has(s.parentID)) byParent.set(s.parentID, [])
+    byParent.get(s.parentID).push(s.id)
+  }
+  const out = new Set(cleanupState.sel)
+  const queue = [...out]
+  while (queue.length) {
+    const id = queue.shift()
+    for (const c of byParent.get(id) || []) if (!out.has(c)) { out.add(c); queue.push(c) }
+  }
+  return [...out]
+}
+
+function cleanupSelectedSize() {
+  const j = cleanupState.data
+  if (!j) return 0
+  const ids = new Set(expandCleanupSelection())
+  return j.sessions.filter((s) => ids.has(s.id)).reduce((a, s) => a + s.sizeBytes, 0)
+}
+
+function updateCleanupFooter() {
+  $("cleanupCount").textContent = "已选 " + cleanupState.sel.size + " 个 · 预计释放 " + fmtBytes(cleanupSelectedSize())
+  const running = !!(cleanupState.data && cleanupState.data.opencodeRunning)
+  $("cleanupExec").disabled = cleanupState.busy || cleanupState.sel.size === 0 || running
+  $("cleanupVacuum").disabled = cleanupState.busy || running
+  if (running) setCleanupStatus("opencode 正在运行：执行前请完全退出 opencode（含桌面端所有进程）。", "warn")
+  else if (!cleanupState.busy) setCleanupStatus("")
+}
+
+function renderCleanup() {
+  const j = cleanupState.data
+  if (!j) return
+  const totalSize = j.sessions.reduce((a, s) => a + s.sizeBytes, 0)
+  const cand = cleanupCandidates()
+  const candSize = cand.reduce((a, s) => a + s.sizeBytes, 0)
+  $("cleanupSummary").innerHTML =
+    '<span class="cleanup-chip">数据库 <b>' + fmtBytes(j.db.sizeBytes) + '</b></span>' +
+    '<span class="cleanup-chip">空洞（可回收）<b>' + fmtBytes(j.db.freeBytes) + '</b></span>' +
+    '<span class="cleanup-chip">' + j.sessions.length + ' 会话 · ' + fmtBytes(totalSize) + '</span>' +
+    '<span class="cleanup-chip">候选（子代理 &gt;3 天）<b>' + cand.length + '</b> · ' + fmtBytes(candSize) + '</span>' +
+    '<span class="cleanup-chip">账本已归档 <b>' + j.ledger.count + '</b> · ' + fmtCost(state.currency === "usd" ? j.ledger.costUsd : j.ledger.costCny) + '</span>'
+  const rows = j.sessions.slice().sort((a, b) => b.sizeBytes - a.sizeBytes)
+  $("cleanupList").innerHTML = rows.map((s) =>
+    '<label class="cleanup-row">' +
+      '<input type="checkbox" data-id="' + esc(s.id) + '"' + (cleanupState.sel.has(s.id) ? " checked" : "") + '>' +
+      '<span class="cleanup-title" title="' + esc(s.title) + '">' +
+        '<span class="tag ' + (s.isMain ? "high" : "sub") + '">' + (s.isMain ? "主" : "子") + '</span> ' +
+        esc(s.title || "（无标题）") +
+      '</span>' +
+      '<span class="muted small" style="width:140px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + esc(s.model) + '">' + esc(s.model) + '</span>' +
+      '<span class="muted small" style="width:56px;text-align:right">' + (s.childCount ? s.childCount + " 子" : "") + '</span>' +
+      '<span class="muted small" style="width:62px;text-align:right">' + fmtAgo(s.ageMs) + '</span>' +
+      '<span class="cleanup-size">' + fmtBytes(s.sizeBytes) + '</span>' +
+      '<span class="cleanup-cost">' + fmtCost(cleanupMoney(s)) + '</span>' +
+    '</label>'
+  ).join("") || '<div class="empty">没有会话</div>'
+  updateCleanupFooter()
+}
+
+async function loadCleanup() {
+  setCleanupStatus("加载中…")
+  try {
+    const res = await fetch("/api/cleanup", { cache: "no-store" })
+    const j = await res.json()
+    if (!j.ok) throw new Error(j.error || "加载失败")
+    const first = !cleanupState.initialized
+    cleanupState.initialized = true
+    cleanupState.data = j
+    const ids = new Set(j.sessions.map((s) => s.id))
+    for (const id of [...cleanupState.sel]) if (!ids.has(id)) cleanupState.sel.delete(id)
+    if (first) for (const s of cleanupCandidates()) cleanupState.sel.add(s.id)
+    renderCleanup()
+    if (!j.opencodeRunning) setCleanupStatus("")
+  } catch (e) {
+    setCleanupStatus("加载失败：" + String((e && e.message) || e), "warn")
+  }
+}
+
+async function runCleanupExec() {
+  const j = cleanupState.data
+  if (!j || cleanupState.busy || !cleanupState.sel.size || j.opencodeRunning) return
+  const expanded = expandCleanupSelection()
+  const msg = "将归档并删除 " + cleanupState.sel.size + " 个选中会话（连同子会话共 " + expanded.length + " 个，约 " + fmtBytes(cleanupSelectedSize()) + "）。\n\n流程：写入账本 → 删除数据 → 残留校验。\n请确认 opencode 已完全退出。\n\n继续？"
+  if (!confirm(msg)) return
+  cleanupState.busy = true
+  updateCleanupFooter()
+  setCleanupStatus("正在归档并删除…（大库可能需要几十秒）", "warn")
+  let done = null
+  try {
+    const res = await fetch("/api/cleanup/execute", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids: expanded }) })
+    const out = await res.json()
+    if (!out.ok) throw new Error(out.error || "失败")
+    cleanupState.sel.clear()
+    await loadCleanup()
+    done = { text: "完成：归档 " + out.archived + " 个 · 删除 " + out.deleted + " 个 · 残留校验通过 · 数据库 " + fmtBytes(out.dbBefore) + " → " + fmtBytes(out.dbAfter), cls: "ok" }
+  } catch (e) {
+    done = { text: "失败：" + String((e && e.message) || e), cls: "warn" }
+  } finally {
+    cleanupState.busy = false
+    updateCleanupFooter()
+  }
+  if (done) setCleanupStatus(done.text, done.cls)
+}
+
+async function runCleanupVacuum() {
+  const j = cleanupState.data
+  if (!j || cleanupState.busy || j.opencodeRunning) return
+  if (!confirm("紧凑化数据库（VACUUM）会重写整个数据库文件：\n- 必须先完全退出 opencode\n- 大库可能需要几分钟，期间控制台会无响应\n- 数据不会丢失\n\n继续？")) return
+  cleanupState.busy = true
+  updateCleanupFooter()
+  setCleanupStatus("正在紧凑化…请勿关闭控制台（可能持续几分钟）", "warn")
+  let done = null
+  try {
+    const res = await fetch("/api/cleanup/vacuum", { method: "POST" })
+    const out = await res.json()
+    if (!out.ok) throw new Error(out.error || "失败")
+    await loadCleanup()
+    done = { text: "紧凑化完成：" + fmtBytes(out.before) + " → " + fmtBytes(out.after), cls: "ok" }
+  } catch (e) {
+    done = { text: "失败：" + String((e && e.message) || e), cls: "warn" }
+  } finally {
+    cleanupState.busy = false
+    updateCleanupFooter()
+  }
+  if (done) setCleanupStatus(done.text, done.cls)
+}
+
+$("cleanupOpen").addEventListener("click", openCleanupModal)
+$("cleanupClose").addEventListener("click", closeCleanupModal)
+$("cleanupMask").addEventListener("click", closeCleanupModal)
+$("cleanupPickCand").addEventListener("click", () => { for (const s of cleanupCandidates()) cleanupState.sel.add(s.id); renderCleanup() })
+$("cleanupPickAll").addEventListener("click", () => { if (!cleanupState.data) return; for (const s of cleanupState.data.sessions) cleanupState.sel.add(s.id); renderCleanup() })
+$("cleanupClear").addEventListener("click", () => { cleanupState.sel.clear(); renderCleanup() })
+$("cleanupList").addEventListener("change", (e) => {
+  const cb = e.target.closest("input[type=checkbox]")
+  if (!cb) return
+  if (cb.checked) cleanupState.sel.add(cb.dataset.id)
+  else cleanupState.sel.delete(cb.dataset.id)
+  updateCleanupFooter()
+})
+$("cleanupExec").addEventListener("click", runCleanupExec)
+$("cleanupVacuum").addEventListener("click", runCleanupVacuum)
 
 async function tick() {
   try {
