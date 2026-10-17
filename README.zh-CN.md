@@ -5,7 +5,7 @@
 | 组件 | 是什么 | 位置 |
 | --- | --- | --- |
 | **Night Shift 夜班** | opencode 插件——你睡觉时让武装的会话继续干活，到点自动下班。多会话、忙时不插队、证据式完成门、空转检测、零依赖、37 个测试。 | [`packages/night-shift/`](packages/night-shift/) · npm `opencode-night-shift`（即将发布） |
-| **控制台** | 本地 Web 控制台——DeepSeek 官方人民币计价账本（区分缓存命中与峰谷）、按轮次花费归因、子代理花费并入主代理、会话分析、夜班启停控制。只读本地 opencode 数据，不联网。 | [`dashboard/`](dashboard/) |
+| **控制台** | 本地 Web 控制台——DeepSeek 官方人民币计价账本（区分缓存命中与峰谷）、按轮次花费归因、子代理花费并入主代理、会话分析、夜班启停控制，以及**会话清理台**（删除前自动归档进永久账本 + 一键紧凑化 VACUUM）。只读本地 opencode 数据，不联网。 | [`dashboard/`](dashboard/) |
 
 ## 快速开始
 
